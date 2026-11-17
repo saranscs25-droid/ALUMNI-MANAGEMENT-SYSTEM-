@@ -1,0 +1,374 @@
+import java.sql.*;
+import java.util.*;
+import java.util.List;
+import java.util.regex.Pattern;
+import java.awt.*;
+import java.awt.event.*;
+import javax.swing.*;
+import javax.swing.border.*;
+import javax.swing.event.*;
+import javax.swing.table.*;
+CREATE DATABASE IF NOT EXISTS alumni_db;
+USE alumni_db;
+CREATE TABLE admin (
+    admin_id INT PRIMARY KEY AUTO_INCREMENT,
+    username VARCHAR(50) NOT NULL UNIQUE,
+    password CHAR(64) NOT NULL
+);
+CREATE TABLE alumni (
+    alumni_id INT PRIMARY KEY AUTO_INCREMENT,
+    name VARCHAR(100) NOT NULL,
+    batch INT NOT NULL,
+    department VARCHAR(50) NOT NULL,
+    email VARCHAR(100),
+    company VARCHAR(100),
+    job_role VARCHAR(100)
+);
+CREATE TABLE events (
+    event_id INT PRIMARY KEY AUTO_INCREMENT,
+    event_name VARCHAR(100) NOT NULL,
+    event_date DATE NOT NULL,
+    venue VARCHAR(100) NOT NULL
+);
+CREATE TABLE registrations (
+    reg_id INT PRIMARY KEY AUTO_INCREMENT,
+    alumni_id INT NOT NULL,
+    event_id INT NOT NULL,
+    UNIQUE (alumni_id, event_id),
+    FOREIGN KEY (alumni_id)
+        REFERENCES alumni(alumni_id) ON DELETE CASCADE,
+    FOREIGN KEY (event_id)
+        REFERENCES events(event_id) ON DELETE CASCADE
+);
+public final class Db {
+    private static final String URL =
+“jdbc:mysql://localhost:3306/alumni_db?useSSL=false&serverTimezone=UTC";
+    private static final String USER = "root";
+    private static final String PASS = "password";
+    public static Connection open() throws SQLException {
+        return DriverManager.getConnection(URL, USER, PASS);
+    }
+    public static List<Object[]> rows(String sql, Object... args) throws SQLException {
+        try (Connection c = open();PreparedStatement ps = c.prepareStatement(sql)) {
+            for (int i = 0; i < args.length; i++)
+                ps.setObject(i + 1, args[i]);
+            try (ResultSet rs = ps.executeQuery()) {
+                int n = rs.getMetaData().getColumnCount();
+                List<Object[]> out = new ArrayList<>();
+                while (rs.next()) {
+                    Object[] r = new Object[n];
+                    for (int i = 0; i < n; i++)
+                        r[i] = rs.getObject(i + 1);
+                    out.add(r);
+                }
+                return out;
+            }
+        }
+    }
+
+    public static int run(String sql, Object... args) throws SQLException {
+        try (Connection c = open();
+PreparedStatement ps = c.prepareStatement(sql)) {
+            for (int i = 0; i < args.length; i++)
+                ps.setObject(i + 1, args[i]);
+            return ps.executeUpdate();
+        }
+    }
+    public static long one(String sql) throws SQLException {
+        return ((Number) rows(sql).get(0)[0]).longValue();
+    }
+    public static boolean login(String user, String pass) throws SQLException {
+        return !rows(
+            "SELECT 1 FROM admin WHERE username=? AND password=SHA2(?,256)",
+            user, pass
+        ).isEmpty();
+    }
+}
+public final class Theme {
+    public static final Color NAVY = new Color(0x0F172A);
+    public static final Color ACCENT = new Color(0x6366F1);
+    public static final Color BG = new Color(0xF1F5F9);
+    public static final Color TEXT = new Color(0x0F172A);
+    public static final Color MUTED = new Color(0x64748B);
+    public static final Color OK = new Color(0x10B981);
+    public static final Color WARN = new Color(0xF59E0B);
+    public static final Color BAD = new Color(0xEF4444);
+    public static final Color LINE = new Color(0xE2E8F0);
+    public static final Font BASE = new Font("Segoe UI", Font.PLAIN, 13);
+    public static final Font BOLD = BASE.deriveFont(Font.BOLD);
+    public static final Font H1 = BASE.deriveFont(Font.BOLD, 26f);
+    public static JTextField field() {
+        JTextField f = new JTextField();
+        f.setFont(BASE);
+        f.setBorder(new CompoundBorder(
+            new LineBorder(new Color(0xCBD5E1), 1, true),
+            new EmptyBorder(7, 10, 7, 10)
+        ));
+        return f;
+    }
+    public static JPanel labeled(String text, JComponent c) {
+        JPanel p = new JPanel(new BorderLayout(0, 4));
+        p.setOpaque(false);
+        JLabel l = new JLabel(text);
+        l.setFont(BOLD);
+        l.setForeground(MUTED);
+        p.add(l, BorderLayout.NORTH);
+        p.add(c);
+        return p;
+    }
+    public static void say(JLabel label, String message, boolean success) {
+        label.setForeground(success ? OK : BAD);
+        label.setText(message);
+    }
+    public static void err(Component c, Exception ex) {
+        JOptionPane.showMessageDialog(
+            c,
+            "Database error: " + ex.getMessage(),
+            "Alumni Connect",
+            JOptionPane.ERROR_MESSAGE
+        );
+    }
+}
+public class LoginFrame extends JFrame {
+    private final JTextField user = Theme.field();
+    private final JPasswordField pass = new JPasswordField();
+    private final JLabel msg = new JLabel(" ");
+    public LoginFrame() {
+        super("Alumni Connect - Sign in");
+        setLayout(new GridLayout(1, 2));
+        JButton go = Theme.btn("Sign in", Theme.ACCENT);
+        go.addActionListener(e -> signIn());
+        getRootPane().setDefaultButton(go);
+        setSize(820, 480);
+        setResizable(false);
+        setLocationRelativeTo(null);
+        setDefaultCloseOperation(EXIT_ON_CLOSE);
+    }
+    private void signIn() {
+        try {
+            if (Db.login(user.getText().trim(), new String(pass.getPassword()))) {
+                new Shell().setVisible(true);
+                dispose();
+            } else {
+                Theme.say(
+                    msg,
+                    "Incorrect username or password",
+                    false
+                );
+            }
+        } catch (SQLException ex) {
+            Theme.say(msg,"Cannot reach database - check Db.java",false);
+        }
+    }
+
+    public static void main(String[] args) {
+        SwingUtilities.invokeLater(() -> new LoginFrame().setVisible(true));
+    }
+}
+private void save(boolean insert) {
+    String n = name.getText().trim();
+    String d = String.valueOf(dept.getSelectedItem()).trim();
+    String m = email.getText().trim();
+    int b;
+    if (n.isEmpty() || d.isEmpty()) {
+        Theme.say(status,"Name and department are required",false);
+        return;
+    }
+    try {
+        b = Integer.parseInt(batch.getText().trim());
+    } catch (NumberFormatException ex) {
+        Theme.say(status,"Batch must be a year such as 2021",false);
+        return;
+    }
+    if (!m.isEmpty() && !m.matches("[\\w.+-]+@[\\w-]+(\\.[\\w-]+)+")) {
+        Theme.say(status, "Enter a valid email address", false);
+        return;
+    }
+    try {
+        if (insert) {
+            Db.run(
+                "INSERT INTO alumni(name,batch,department,email,company,job_role) VALUES (?,?,?,?,?,?)",
+                n, b, d, m,
+                company.getText().trim(),
+                role.getText().trim()
+            );
+        } else {
+            int r = table.getSelectedRow();
+            if (r < 0) {
+                Theme.say(status, "Select a row to update", false);
+                return;
+            }
+            Db.run(
+                "UPDATE alumni SET name=?,batch=?,department=?,email=?,company=?,job_role=? WHERE alumni_id=?",
+                n, b, d, m,
+                company.getText().trim(),
+                role.getText().trim(),
+                model.getValueAt(table.convertRowIndexToModel(r), 0)
+            );
+        }
+        load();
+        clear();
+        Theme.say(status, insert ? "Alumnus added" : "Record updated",true);
+    } catch (SQLException ex) {
+        Theme.err(this, ex);
+    }
+}
+private void delete() {
+    int r = table.getSelectedRow();
+    if (r < 0) {
+        Theme.say(status, "Select a row to delete", false);
+        return;
+    }
+    r = table.convertRowIndexToModel(r);
+    if (JOptionPane.showConfirmDialog(
+            this,
+            "Delete " + cell(r, 1) + "?",
+            "Confirm",
+            JOptionPane.YES_NO_OPTION
+        ) != JOptionPane.YES_OPTION) {
+        return;
+    }
+    try {
+        Db.run(
+            "DELETE FROM alumni WHERE alumni_id=?",
+            model.getValueAt(r, 0)
+        );
+        load();
+        clear();
+        Theme.say(status, "Record deleted", true);
+    } catch (SQLException ex) {
+        Theme.err(this, ex);
+    }
+}
+private void addEvent() {
+    if (name.getText().trim().isEmpty() || venue.getText().trim().isEmpty()) {
+        Theme.say(status, "Event name and venue are required",false);
+        return;
+    }
+    try {
+        Db.run(
+            "INSERT INTO events(event_name,event_date,venue) VALUES (?,?,?)",
+            name.getText().trim(),
+            Date.valueOf(date.getText().trim()),
+            venue.getText().trim()
+        );
+        name.setText("");
+        date.setText("");
+        venue.setText("");
+        loadEvents();
+        Theme.say(status, "Event created", true);
+    } catch (IllegalArgumentException ex) {
+        Theme.say(
+            status,
+            "Type the date as yyyy-mm-dd",
+            false
+        );
+    } catch (SQLException ex) {
+        Theme.err(this, ex);
+    }
+}
+
+private void register() {
+    int ev = selectedEvent();
+    if (ev < 0 || alumniBox.getSelectedItem() == null) {
+        Theme.say(status, "Select an event and an alumnus",false);
+        return;
+    }
+    int alumniId = Integer.parseInt(
+        alumniBox.getSelectedItem().toString().split(" - ")[0]
+    );
+    try {
+        Db.run(
+            "INSERT INTO registrations(alumni_id,event_id) VALUES (?,?)",
+            alumniId, ev
+        );
+        showRegistrations();
+        Theme.say(status, "Registered successfully", true);
+    } catch (SQLIntegrityConstraintViolationException ex) {
+        Theme.say(status, "That alumnus is already registered", false);
+    } catch (SQLException ex) {
+        Theme.err(this, ex);
+    }
+}
+private void showRegistrations() {
+    int ev = selectedEvent();
+    if (ev < 0)
+        return;
+    try {
+        regModel.setRowCount(0);
+
+        for (Object[] r : Db.rows(
+                "SELECT a.alumni_id,a.name,a.batch,a.department "
+                + "FROM registrations r "
+                + "JOIN alumni a ON a.alumni_id=r.alumni_id "
+                + "WHERE r.event_id=? ORDER BY a.name",
+                ev)) {
+            regModel.addRow(r);
+        }
+    } catch (SQLException ex) {
+        Theme.err(this, ex);
+    }
+}
+private static final String[] COLS = {"batch", "department", "company", "job_role"};
+private void run() {
+    try {
+        model.setRowCount(0);
+        String sql =
+            "SELECT * FROM alumni WHERE CAST("
+            + COLS[by.getSelectedIndex()]
+            + " AS CHAR) LIKE ? ORDER BY name";
+        for (Object[] r : Db.rows(sql, "%" + query.getText().trim() + "%")) {
+            model.addRow(r);
+        }
+        count.setText(model.getRowCount() + " alumni found");
+    } catch (SQLException ex) {
+        count.setText("Database error: " + ex.getMessage());
+    }
+void refresh() {
+    try {
+        vals[0].setText("" + Db.one("SELECT COUNT(*) FROM alumni"));
+        vals[1].setText("" + Db.one("SELECT COUNT(*) FROM events"));
+        vals[2].setText("" + Db.one("SELECT COUNT(*) FROM registrations")
+);
+        vals[3].setText(
+            "" + Db.one(
+                "SELECT COUNT(DISTINCT company) "
+                + "FROM alumni WHERE company<>''"
+            )
+        );
+        chart.data = Db.rows(
+            "SELECT department, COUNT(*) "
+            + "FROM alumni GROUP BY department "
+            + "ORDER BY 2 DESC"
+        );
+        chart.repaint();
+        upcoming.setRowCount(0);
+        for (Object[] r : Db.rows(
+                "SELECT event_name,event_date,venue "
+                + "FROM events WHERE event_date>=CURDATE() "
+                + "ORDER BY event_date LIMIT 6"
+            )) {
+            upcoming.addRow(r);
+        }
+    } catch (SQLException ex) {
+        Theme.err(this, ex);
+    }}
+INSERT INTO admin(username, password)
+VALUES ('admin', SHA2('admin123', 256));
+INSERT INTO alumni
+(name, batch, department, email, company, job_role)
+VALUES
+('Arun Kumar', 2019, 'CSE', 'arun@mail.com',
+ 'TCS', 'Software Engineer'),
+('Priya Sharma', 2019, 'IT', 'priya@mail.com',
+ 'Infosys', 'System Analyst'),
+('Karthik Raja', 2020, 'ECE', 'karthik@mail.com',
+ 'Zoho', 'Developer');
+
+INSERT INTO events(event_name, event_date, venue)
+VALUES
+('Annual Alumni Meet', '2026-12-20', 'Main Auditorium'),
+('Career Guidance Talk', '2026-11-15', 'Seminar Hall');
+
+INSERT INTO registrations(alumni_id, event_id)
+VALUES (1, 1), (2, 1), (3, 2);
